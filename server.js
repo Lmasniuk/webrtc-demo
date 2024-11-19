@@ -17,7 +17,8 @@ server.on('connection', (socket) => {
 
       case 'signal':
         console.log(data.targetId);
-        
+
+        //TODO: Get random socket ID and connect to it.
         const targetSocket = clients.get(data.targetId);
         if (targetSocket) {
           targetSocket.send(JSON.stringify({
