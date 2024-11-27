@@ -1,16 +1,17 @@
 {
-  "name": "stream-test",
-  "version": "1.0.0",
-  "main": "client.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "nodemon server.js"
-  },
-  "author": "",
-  "license": "ISC",
-  "description": "",
-  "dependencies": {
-    "nodemon": "^3.1.7",
-    "ws": "^8.18.0"
-  }
+    "name": "stream-test",
+    "version": "1.0.0",
+    "main": "client.js",
+    "type": "module",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1",
+        "start": "nodemon server.js"
+    },
+    "author": "",
+    "license": "ISC",
+    "description": "",
+    "dependencies": {
+        "nodemon": "^3.1.7",
+        "ws": "^8.18.0"
+    }
 }
