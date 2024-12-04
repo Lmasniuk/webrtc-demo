@@ -2,8 +2,10 @@
 const signalingServerUrl = "ws://localhost:8080";
 
 const clientId = Math.random().toString(36).substring(2, 9); // Generate a random ID
+let remoteClientId = 0;
 let peerConnection;
 let signalingSocket;
+const iceCandidatesQueue = [];
 
 // Elements
 const localVideo = document.getElementById("localVideo");
@@ -48,9 +50,6 @@ async function setupWebRTC() {
         .getTracks()
         .forEach((track) => peerConnection.addTrack(track, stream));
 
-    // console.log("Get tracks:");
-    // console.log(stream.getTracks());
-
     //This will get fired when a remote peer sends a media stream track
     peerConnection.ontrack = (event) => {
         remoteVideo.srcObject = event.streams[0];
@@ -60,10 +59,8 @@ async function setupWebRTC() {
 
     const offer = await peerConnection.createOffer();
 
-    //Setting the SDP. This will begin to generate ICE candidates
     await peerConnection.setLocalDescription(offer);
 
-    //Send the offer to the websocket, seeing if any other clients will "take it"
     signalingSocket.send(
         JSON.stringify({
             messageType: "offer",
@@ -73,86 +70,86 @@ async function setupWebRTC() {
     );
 }
 
-/**
- * Handle ice candidate event.
- * @param {RTCPeerConnectionIceEvent} event - The event emitted by RTCPeerConnection.
- */
-let iceCandies = 0;
 const handleIceCandidate = (event) => {
-    // console.log("Sending ICE candidate:", event.candidate);
     if (event.candidate) {
-        signalingSocket.send(
-            JSON.stringify({
-                messageType: "iceCandidate",
-                clientId,
-                payload: event.candidate,
-            })
-        );
+        // if (peerConnection.remoteDescription === null) {
+        //     iceCandidatesQueue.push(event.candidate);
+        // } else
+        if (peerConnection.remoteDescription) {
+            signalingSocket.send(
+                JSON.stringify({
+                    messageType: "iceCandidate",
+                    clientId,
+                    targetClientId: remoteClientId,
+                    payload: event.candidate,
+                })
+            );
+        } else {
+            iceCandidatesQueue.push(event.candidate);
+        }
     }
 };
 
 const processMessageFromSignalServer = async (message) => {
     const messageData = JSON.parse(message.data);
-    // console.log("Message received from signaling server");
-    // console.log(messageData);
 
-    if (messageData.type === "iceCandidateFromSignalingServer") {
-        console.log("received ice candidate from another peer");
+    if (messageData.type === "signaledOffer") {
+        const { payload, offeringClientId } = messageData;
+        console.log("Signaled Offer Received from:" + offeringClientId);
+        remoteClientId = offeringClientId;
+        await peerConnection.setRemoteDescription(
+            new RTCSessionDescription(payload)
+        );
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+
+        signalingSocket.send(
+            JSON.stringify({
+                messageType: "answer",
+                offeringClientId: remoteClientId,
+                answeringClientId: clientId,
+                payload: peerConnection.localDescription,
+            })
+        );
+
+        iceCandidatesQueue.forEach((candidate) => {
+            console.log("we sending a candidate");
+            signalingSocket.send(
+                JSON.stringify({
+                    messageType: "iceCandidate",
+                    clientId,
+                    targetClientId: remoteClientId,
+                    payload: candidate,
+                })
+            );
+        });
+        iceCandidatesQueue.length = 0;
+
+        // signalingSocket.send(
+        //     JSON.stringify({
+        //         messageType: "socketUsed",
+        //         clientId,
+        //     })
+        // );
     }
 
-    //If the message has a payload, that payload will be either a peerConnection.localDescription, or an iceCandidate
-    if (messageData.type === "signal" && messageData.payload) {
-        const { payload } = messageData;
-        console.log(
-            `${
-                payload.type
-            } signal message received at ${new Date().toISOString()}`
-        );
-        if (payload.type === undefined) {
-            console.log("payload type undefined --> Candidate");
-            console.log(payload);
+    if (messageData.type === "signaledAnswer") {
+        console.log("signaledAnswer message received");
+
+        console.log(remoteClientId);
+        remoteClientId = messageData.offeringClientId;
+        if (remoteClientId !== 0) {
+            await peerConnection.setRemoteDescription(
+                new RTCSessionDescription(messageData.payload)
+            );
         }
-        // console.log(payload.type);
-        if (payload.type === "offer") {
-            console.log("payload type: offer");
-            console.log(payload);
-            await peerConnection.setRemoteDescription(
-                new RTCSessionDescription(payload)
-            );
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-
-            signalingSocket.send(
-                JSON.stringify({
-                    messageType: "answer",
-                    clientId,
-                    payload: peerConnection.localDescription,
-                })
-            );
-
-            signalingSocket.send(
-                JSON.stringify({
-                    messageType: "socketUsed",
-                    clientId,
-                })
-            );
-        } else if (payload.type === "answer") {
-            console.log("payload type: answer");
-            console.log(payload);
-            await peerConnection.setRemoteDescription(
-                new RTCSessionDescription(payload)
-            );
-
-            signalingSocket.send(
-                JSON.stringify({
-                    messageType: "socketUsed",
-                    clientId,
-                })
-            );
-
-            //Neither answer or offer, so we just add an iceCandidate to the peer connection
-        } else if (payload.candidate) {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(payload));
+    }
+    if (messageData.type === "signaledIceCandidate") {
+        // console.log(messageData);
+        // console.log(peerConnection);
+        if (messageData.payload) {
+            const candidate = new RTCIceCandidate(messageData.payload);
+            await peerConnection.addIceCandidate(candidate);
         }
     }
 };
@@ -160,8 +157,12 @@ const processMessageFromSignalServer = async (message) => {
 const connectToSignalServer = () => {
     //This adds the client id to the available sockets(managed by the signaling server) that can be connected to
     signalingSocket.send(JSON.stringify({ messageType: "join", clientId }));
-    // console.log("Connected to signaling server");
 };
 // Start everything
 setupSignaling();
 setupWebRTC();
+
+setInterval(() => {
+    console.log("Client id:" + clientId);
+    console.log("Remote client id: " + remoteClientId);
+}, 3000);

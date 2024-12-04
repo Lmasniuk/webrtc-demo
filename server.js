@@ -8,57 +8,84 @@ const server = new WebSocketServer({ port: 8080 });
 
 const clients = new Map();
 
-let numberOfSignals = 0;
-
 server.on("connection", (socket) => {
-    console.log("Client connected");
-
     socket.on("message", (message) => {
         const data = JSON.parse(message);
 
-        switch (data.type) {
+        switch (data.messageType) {
             case "join":
+                // We just add the socket to the clients map so that the socket
+                // becomes part of the available sockets to connect to
                 clients.set(data.clientId, { socket: socket, inUse: false });
-                console.log(`Client ${data.clientId} joined`);
                 break;
 
-            case "signal":
-                numberOfSignals++;
-                console.log("Client has sent a signal");
+            case "iceCandidate":
+                //If there isn't a target client id, then all the ice candidates go to nowhere
+                if (data.targetClientId !== 0) {
+                    // console.log(
+                    //     `Attempting to connect ${data.clientId} to ${data.targetClientId}`
+                    // );
+                    const targetClient = clients.get(data.targetClientId);
+
+                    if (targetClient && targetClient.socket) {
+                        targetClient.socket.send(
+                            JSON.stringify({
+                                type: "signaledIceCandidate",
+                                payload: data.payload,
+                            })
+                        );
+                    } else {
+                        console.log(
+                            `No target socket for ${data.targetClientId}`
+                        );
+                    }
+                }
+
+                break;
+
+            case "offer":
                 const randomSocketId = getRandomSocketId(
                     clients,
                     data.clientId
                 );
-                console.log("NumSignals:", numberOfSignals);
-                //Get a potentially available socket
                 if (randomSocketId === 0) {
-                    console.log("No available sockets");
+                    // console.log("No available sockets");
                     break;
                 } else {
-                    console.log(
-                        "Random socket id is available:",
-                        randomSocketId
-                    );
-                    console.log(clients.keys());
-                    //Send the signal to peer 2 to try and connect
                     const targetSocket = clients.get(randomSocketId).socket;
-
-                    // console.log(targetSocket);
-                    // if (targetSocket) {
                     targetSocket.send(
                         JSON.stringify({
-                            type: "signal",
-                            from: data.clientId,
+                            type: "signaledOffer",
                             payload: data.payload,
+                            offeringClientId: data.clientId,
                         })
                     );
-                    // }
-                    break;
                 }
+                console.log(
+                    data.clientId + " sending an offer to " + randomSocketId
+                );
+
+                break;
+            case "answer": {
+                console.log(
+                    `Client ID: ${data.answeringClientId} answering to ${data.offeringClientId}`
+                );
+                const socketToAnswerTo = clients.get(
+                    data.offeringClientId
+                ).socket;
+                // console.log(Object.keys(socketToAnswerTo));
+                socketToAnswerTo.send(
+                    JSON.stringify({
+                        type: "signaledAnswer",
+                        offeringClientId: data.offeringClientId,
+                        payload: data.payload,
+                    })
+                );
+
+                break;
+            }
 
             case "socketUsed":
-                console.log(`Connection made by: ${data.clientId}`);
-                console.log(data);
                 const socketData = clients.get(data.clientId).socket;
                 clients.set(data.clientId, {
                     socket: socketData,
@@ -88,11 +115,9 @@ console.log("Signaling server running on ws://localhost:8080");
 //returns 0 if there are no available sockets
 const getRandomSocketId = (clients, excludeKey) => {
     const keys = Array.from(clients.keys());
-    console.log(keys.length);
     const availableKeys = keys
         .filter((key) => key !== excludeKey)
         .filter((key) => !clients.get(key).inUse);
-    console.log(availableKeys);
 
     if (availableKeys.length !== 0) {
         const randomKey =
@@ -103,18 +128,19 @@ const getRandomSocketId = (clients, excludeKey) => {
     }
 };
 
+const getAvailableSocketIds = (clients) => {
+    const availableSocketIds = [];
+    for (const [key, value] of clients) {
+        if (value.inUse === false) {
+            availableSocketIds.push(key);
+        }
+    }
+    return availableSocketIds;
+};
+
 function debug() {
     setInterval(() => {
-        // console.log(clients.keys());
-
-        const availableSocketIds = [];
-        for (const [key, value] of clients.entries()) {
-            console.log(key);
-            if (value.inUse === false) {
-                availableSocketIds.push(key);
-            }
-        }
-        console.log("Available sockets:");
-        console.log(availableSocketIds);
+        // console.log("Available sockets:");
+        // console.log(getAvailableSocketIds(clients));
     }, 2000);
 }
